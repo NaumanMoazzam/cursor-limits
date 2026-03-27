@@ -10,6 +10,8 @@ VS Code / **Cursor** extension that reads your session from Cursor’s local SQL
 
 This extension uses **undocumented** storage keys and `cursor.com` routes that may change at any time. It may **stop working** after a Cursor update. See [SECURITY.md](SECURITY.md) for what is read and where requests go, and [POLICY.md](POLICY.md) before publishing or redistributing.
 
+This is tested on MacOS -- For Windows & Linux, it may not work as intended.
+
 ## Features
 
 - **Minimal setup**: Reads `cursorAuth/accessToken` from Cursor’s `state.vscdb` via the system `sqlite3` binary (no manual token copy).
@@ -30,25 +32,6 @@ This extension uses **undocumented** storage keys and `cursor.com` routes that m
 1. Run `npm install` and `npm run compile`, then `npm run vsix` to produce `cursor-limits-0.0.1.vsix` (version from `package.json`).
 2. In Cursor: **Extensions** → **…** → **Install from VSIX…** and select the file.
 
-### From a marketplace (when published)
-
-After the extension is published under publisher `naumanmoazzam`, install from the Extensions view or use your editor’s CLI, for example:
-
-```bash
-code --install-extension naumanmoazzam.cursor-limits
-```
-
-Use the equivalent command for **Cursor** if documented (publisher and extension id may match the marketplace listing).
-
-**Note:** Primary distribution for extensions is the **Visual Studio Marketplace** and/or **Open VSX**, not `npm install` as an app installer. This repo is not published as a general-purpose npm library.
-
-### Publishing to a marketplace (maintainers)
-
-1. **Build**: `npm install`, `npm run compile`, `npm run vsix` (sanity-check the `.vsix`).
-2. **Visual Studio Marketplace**: Create a [publisher](https://code.visualstudio.com/api/working-with-extensions/publishing-extension), install `@vscode/vsce`, then `vsce login` / `vsce publish` with a [Personal Access Token](https://code.visualstudio.com/api/working-with-extensions/publishing-extension#publishing-extensions).
-3. **Open VSX** (optional, e.g. some VS Code forks): Follow [Publishing Extensions](https://github.com/eclipse/openvsx/wiki/Publishing-Extensions) and use `npx ovsx publish` after obtaining a token.
-
-Publishing requires your own accounts and tokens; this repository does not store secrets.
 
 ## Development
 
