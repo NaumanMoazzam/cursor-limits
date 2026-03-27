@@ -4,6 +4,7 @@
   "publisher": "naumanmoazzam",
   "description": "Show Cursor fast/slow limits in the status bar",
   "version": "0.0.1",
+  "icon": "icon.png",
   "license": "MIT",
   "engines": {
     "vscode": "^1.80.0"
