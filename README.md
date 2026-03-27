@@ -6,6 +6,8 @@ VS Code / **Cursor** extension that reads your session from Cursor’s local SQL
 
 This extension uses **undocumented** storage keys and `cursor.com` routes that may change at any time. It may **stop working** after a Cursor update. See [SECURITY.md](SECURITY.md) for what is read and where requests go, and [POLICY.md](POLICY.md) before publishing or redistributing.
 
+This is tested on MacOS -- For Windows & Linux, it may not work as intended.
+
 ## Features
 
 - **Minimal setup**: Reads `cursorAuth/accessToken` from Cursor’s `state.vscdb` via the system `sqlite3` binary (no manual token copy).
