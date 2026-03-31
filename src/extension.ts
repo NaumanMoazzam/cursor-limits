@@ -6,6 +6,7 @@ import * as path from 'path';
 // Cursor dashboard APIs (must match cookie format the site expects; see cursor.com network tab)
 const CURSOR_USAGE_SUMMARY_API = 'https://cursor.com/api/usage-summary';
 const CURSOR_USAGE_API = 'https://cursor.com/api/usage';
+const CURSOR_PLAN_INFO_API = 'https://cursor.com/api/dashboard/get-plan-info';
 const CURSOR_SPENDING_DASHBOARD_URL = 'https://cursor.com/dashboard/spending';
 
 let statusBarItem: vscode.StatusBarItem;
@@ -137,6 +138,90 @@ function formatPercent(value: number | null): string {
     return value === null ? 'N/A' : `${Math.round(value)}%`;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+    return value !== null && typeof value === 'object' ? value as Record<string, unknown> : null;
+}
+
+function firstString(...values: unknown[]): string | null {
+    for (const value of values) {
+        if (typeof value === 'string' && value.trim().length > 0) {
+            return value.trim();
+        }
+    }
+    return null;
+}
+
+function formatDate(value: unknown): string | null {
+    if (value === null || value === undefined) {
+        return null;
+    }
+
+    let date: Date | null = null;
+
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        // Handle both seconds and milliseconds epoch values.
+        const epochMs = value > 1_000_000_000_000 ? value : value * 1000;
+        date = new Date(epochMs);
+    } else if (typeof value === 'string' && value.trim().length > 0) {
+        const numeric = Number(value);
+        if (Number.isFinite(numeric)) {
+            const epochMs = numeric > 1_000_000_000_000 ? numeric : numeric * 1000;
+            date = new Date(epochMs);
+        } else {
+            date = new Date(value);
+        }
+    }
+
+    if (!date || Number.isNaN(date.getTime())) {
+        return null;
+    }
+
+    return new Intl.DateTimeFormat(undefined, {
+        year: 'numeric',
+        month: 'short',
+        day: '2-digit',
+    }).format(date);
+}
+
+function extractSubscriptionDetails(summaryData: Record<string, unknown>): { planName: string | null; planExpiry: string | null } {
+    const individualUsage = asRecord(summaryData.individualUsage);
+    const plan = asRecord(individualUsage?.plan);
+    const subscription = asRecord(individualUsage?.subscription);
+
+    const planName = firstString(
+        plan?.displayName,
+        plan?.name,
+        plan?.planName,
+        plan?.tier,
+        plan?.type,
+        subscription?.name,
+        subscription?.planName,
+        individualUsage?.planName,
+        summaryData.planName,
+    );
+
+    const planExpiry = formatDate(
+        plan?.expiresAt ??
+        plan?.expiry ??
+        plan?.expiration ??
+        plan?.expirationDate ??
+        plan?.currentPeriodEnd ??
+        plan?.renewsAt ??
+        plan?.renewalDate ??
+        plan?.nextBillingDate ??
+        subscription?.expiresAt ??
+        subscription?.expirationDate ??
+        subscription?.currentPeriodEnd ??
+        subscription?.renewsAt ??
+        individualUsage?.expiresAt ??
+        individualUsage?.expirationDate ??
+        summaryData.expiresAt ??
+        summaryData.expirationDate
+    );
+
+    return { planName, planExpiry };
+}
+
 async function updateUsageStats() {
     const accessToken = getCursorAuthToken();
 
@@ -169,7 +254,43 @@ async function updateUsageStats() {
                 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         };
 
-        // Preferred source: usage summary, which matches "Included in Pro / Auto / API" dashboard metrics.
+        let subscriptionDetails: { planName: string | null; planExpiry: string | null } = {
+            planName: null,
+            planExpiry: null,
+        };
+
+        // Primary source for plan metadata.
+        const planInfoResponse = await fetch(CURSOR_PLAN_INFO_API, {
+            method: 'POST',
+            headers: {
+                ...baseHeaders,
+                Accept: '*/*',
+                'Content-Type': 'application/json',
+            },
+            body: '{}',
+        });
+
+        if (planInfoResponse.ok) {
+            const planInfoData = await planInfoResponse.json() as Record<string, unknown>;
+            const planInfo = asRecord(planInfoData.planInfo);
+            if (planInfo) {
+                subscriptionDetails.planName = firstString(
+                    planInfo.planName,
+                    planInfo.name,
+                    planInfo.tier,
+                );
+                subscriptionDetails.planExpiry = formatDate(
+                    planInfo.billingCycleEnd ??
+                    planInfo.expiresAt ??
+                    planInfo.expirationDate ??
+                    planInfo.currentPeriodEnd ??
+                    planInfo.renewsAt
+                );
+            }
+        }
+
+        // Preferred source for usage metrics, which matches "Included in Pro / Auto / API" dashboard metrics.
+
         const summaryResponse = await fetch(CURSOR_USAGE_SUMMARY_API, {
             headers: {
                 ...baseHeaders,
@@ -177,8 +298,14 @@ async function updateUsageStats() {
         });
 
         if (summaryResponse.ok) {
-            const summaryData: Record<string, any> = await summaryResponse.json();
-            const plan = summaryData?.individualUsage?.plan;
+            const summaryData = await summaryResponse.json() as Record<string, unknown>;
+            const summarySubscriptionDetails = extractSubscriptionDetails(summaryData);
+            subscriptionDetails = {
+                planName: subscriptionDetails.planName ?? summarySubscriptionDetails.planName,
+                planExpiry: subscriptionDetails.planExpiry ?? summarySubscriptionDetails.planExpiry,
+            };
+            const individualUsage = asRecord(summaryData.individualUsage);
+            const plan = asRecord(individualUsage?.plan);
 
             const totalPercent = toFiniteNumber(plan?.totalPercentUsed);
             const autoPercent = toFiniteNumber(plan?.autoPercentUsed);
@@ -206,6 +333,9 @@ async function updateUsageStats() {
                 const tooltip = new vscode.MarkdownString();
                 tooltip.isTrusted = true;
                 tooltip.appendMarkdown(`### Cursor Usage Dashboard\n\n`);
+                tooltip.appendMarkdown(`--- \n\n`);
+                tooltip.appendMarkdown(`**Current Plan:** ${subscriptionDetails.planName ?? 'N/A'} \n\n`);
+                tooltip.appendMarkdown(`**Plan Expiry:** ${subscriptionDetails.planExpiry ?? 'N/A'} \n\n`);
                 tooltip.appendMarkdown(`--- \n\n`);
                 tooltip.appendMarkdown(`**Included in Pro (Total):** ${formatPercent(totalPercent)} \n\n`);
                 tooltip.appendMarkdown(`**Auto + Composer:** ${formatPercent(autoPercent)} \n\n`);
@@ -270,6 +400,9 @@ async function updateUsageStats() {
         const tooltip = new vscode.MarkdownString();
         tooltip.isTrusted = true;
         tooltip.appendMarkdown(`### Cursor Usage Dashboard\n\n`);
+        tooltip.appendMarkdown(`--- \n\n`);
+        tooltip.appendMarkdown(`**Current Plan:** ${subscriptionDetails.planName ?? 'N/A'} \n\n`);
+        tooltip.appendMarkdown(`**Plan Expiry:** ${subscriptionDetails.planExpiry ?? 'N/A'} \n\n`);
         tooltip.appendMarkdown(`--- \n\n`);
         tooltip.appendMarkdown(`**Premium Requests:** ${premiumUsed} / ${premiumLimit ?? 'N/A'} \n\n`);
         tooltip.appendMarkdown(`**Auto/Composer:** ${autoUsed} / ${autoLimit ?? 'N/A'} \n\n`);

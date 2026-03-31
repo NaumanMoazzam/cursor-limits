@@ -32,6 +32,10 @@ This is tested on MacOS -- For Windows & Linux, it may not work as intended.
 1. Run `npm install` and `npm run compile`, then `npm run vsix` to produce `cursor-limits-0.0.1.vsix` (version from `package.json`).
 2. In Cursor: **Extensions** → **…** → **Install from VSIX…** and select the file.
 
+### Open VSX (published)
+
+- `cursor-limits` is published on Open VSX: [naumanmoazzam/cursor-limits](https://open-vsx.org/extension/naumanmoazzam/cursor-limits)
+
 
 ## Development
 
