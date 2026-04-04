@@ -8,7 +8,7 @@
   - **macOS**: `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`
   - **Windows**: `%APPDATA%\Cursor\User\globalStorage\state.vscdb`
   - **Linux**: `~/.config/Cursor/User/globalStorage/state.vscdb`
-- Extracts the value stored under the key `cursorAuth/accessToken` (session token) using the system `sqlite3` CLI.
+- Extracts the value stored under the key `cursorAuth/accessToken` (session token) by opening the file with **sql.js** (SQLite in WebAssembly) inside the extension process—no external `sqlite3` binary.
 - The token is kept **in memory** inside the extension host process for the purpose of API calls described below. It is **not** written to project files or logs by this extension (beyond normal VS Code / OS diagnostics you should assume may exist).
 
 **Network**
