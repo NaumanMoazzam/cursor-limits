@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import type { LineEditsViewModel } from './userAnalytics';
 
 /** Serializable payload for the stats webview (postMessage / refresh). */
 export type StatsPanelData =
@@ -15,6 +16,7 @@ export type StatsPanelData =
           includedUsed: number | null;
           includedLimit: number | null;
           progressRatio: number;
+          lineEdits: LineEditsViewModel | null;
       }
     | {
           status: 'ok';
@@ -26,6 +28,7 @@ export type StatsPanelData =
           autoUsed: number;
           autoLimit: number | null;
           progressRatio: number;
+          lineEdits: LineEditsViewModel | null;
       };
 
 const VIEW_TYPE = 'cursorLimits.stats';
@@ -175,6 +178,112 @@ function statsWebviewHtml(nonce: string): string {
       margin-top: 14px;
       border-radius: 4px;
     }
+
+    .le-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    .le-title {
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: none;
+      letter-spacing: 0.02em;
+      margin: 0 0 2px 0;
+    }
+    .le-total {
+      font-size: 22px;
+      font-weight: 600;
+      line-height: 1.1;
+      margin: 0;
+    }
+    .le-seg {
+      display: flex;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+    .le-seg button {
+      background: transparent;
+      color: var(--fg);
+      border: none;
+      padding: 5px 10px;
+      font-size: 11px;
+      cursor: pointer;
+      border-radius: 0;
+    }
+    .le-seg button:hover { background: var(--vscode-toolbar-hoverBackground); }
+    .le-seg button.active {
+      background: var(--vscode-input-background);
+      font-weight: 500;
+    }
+    .hm-wrap { margin-top: 10px; overflow-x: auto; }
+    .hm-months {
+      display: flex;
+      gap: 3px;
+      margin: 0 0 4px 18px;
+      min-height: 14px;
+    }
+    .hm-months span {
+      width: 14px;
+      font-size: 9px;
+      color: var(--muted);
+      text-align: center;
+      flex-shrink: 0;
+    }
+    .hm-body { display: flex; gap: 6px; align-items: stretch; }
+    .hm-yaxis {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      font-size: 9px;
+      color: var(--muted);
+      padding: 0 2px 0 0;
+      width: 12px;
+      flex-shrink: 0;
+    }
+    .hm-yaxis span { line-height: 11px; height: 11px; }
+    .hm-grid {
+      display: grid;
+      grid-auto-flow: column;
+      grid-template-rows: repeat(7, 11px);
+      grid-auto-columns: 11px;
+      gap: 3px;
+    }
+    .hm-cell {
+      width: 11px;
+      height: 11px;
+      border-radius: 2px;
+    }
+    .hm-l0 { background: var(--vscode-input-background, rgba(120,120,120,0.14)); }
+    .hm-l1 { background: color-mix(in srgb, var(--vscode-charts-green, #3fb950) 35%, var(--vscode-input-background)); }
+    .hm-l2 { background: color-mix(in srgb, var(--vscode-charts-green, #3fb950) 55%, transparent); }
+    .hm-l3 { background: color-mix(in srgb, var(--vscode-charts-green, #3fb950) 75%, transparent); }
+    .hm-l4 { background: var(--vscode-charts-green, #3fb950); }
+    .le-stats {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px 16px;
+      margin-top: 14px;
+      font-size: 12px;
+    }
+    .le-stats dt { color: var(--muted); font-size: 11px; margin: 0; }
+    .le-stats dd { margin: 2px 0 0 0; font-weight: 500; }
+    .le-legend {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 12px;
+      font-size: 10px;
+      color: var(--muted);
+    }
+    .le-legend .sw { display: flex; gap: 2px; }
+    .le-legend .sw span { width: 11px; height: 11px; border-radius: 2px; }
+    .le-unavailable { color: var(--muted); font-size: 12px; margin: 8px 0 0 0; }
+    .footer-links { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
   </style>
 </head>
 <body>
@@ -185,7 +294,8 @@ function statsWebviewHtml(nonce: string): string {
     <span class="msg" id="status"></span>
   </div>
   <div id="root"></div>
-  <div class="footer">
+  <div class="footer footer-links">
+    <a href="#" id="openDashboard">Open Cursor dashboard</a>
     <a href="#" id="openSpending">Open spending on cursor.com</a>
   </div>
   <script nonce="${nonce}">
@@ -194,6 +304,10 @@ function statsWebviewHtml(nonce: string): string {
     const refreshBtn = document.getElementById('refresh');
     const statusEl = document.getElementById('status');
     const openSpending = document.getElementById('openSpending');
+    const openDashboard = document.getElementById('openDashboard');
+
+    var lastPayload = null;
+    var lineFilter = 'all';
 
     function pct(n) {
       if (n === null || n === undefined || typeof n !== 'number' || !isFinite(n)) return 'N/A';
@@ -214,7 +328,7 @@ function statsWebviewHtml(nonce: string): string {
     }
 
     function skeletonMarkup() {
-      return (
+      var u =
         '<div class="card sk-card" aria-hidden="true">' +
         '<div class="sk-row"><span class="sk sk-line sk-line--label"></span><span class="sk sk-line sk-line--value"></span></div>' +
         '<div class="sk-row"><span class="sk sk-line sk-line--label"></span><span class="sk sk-line sk-line--value"></span></div>' +
@@ -222,8 +336,14 @@ function statsWebviewHtml(nonce: string): string {
         '<div class="sk-row"><span class="sk sk-line sk-line--label"></span><span class="sk sk-line sk-line--value"></span></div>' +
         '<div class="sk-row"><span class="sk sk-line sk-line--label"></span><span class="sk sk-line sk-line--value"></span></div>' +
         '<div class="sk-row"><span class="sk sk-line sk-line--label"></span><span class="sk sk-line sk-line--value"></span></div>' +
-        '</div>'
-      );
+        '</div>';
+      var le =
+        '<div class="card sk-card" aria-hidden="true" style="margin-top:12px">' +
+        '<div class="sk-row"><span class="sk sk-line sk-line--label"></span><span class="sk sk-line sk-line--value"></span></div>' +
+        '<div class="sk sk-bar" style="height:80px;margin-top:12px"></div>' +
+        '<div class="sk-row"><span class="sk sk-line sk-line--label"></span><span class="sk sk-line sk-line--value"></span></div>' +
+        '</div>';
+      return u + le;
     }
 
     function showSkeleton() {
@@ -231,7 +351,177 @@ function statsWebviewHtml(nonce: string): string {
       root.innerHTML = skeletonMarkup();
     }
 
+    function pad2(n) { return n < 10 ? '0' + n : String(n); }
+    function fmtKey(dt) {
+      return dt.getFullYear() + '-' + pad2(dt.getMonth() + 1) + '-' + pad2(dt.getDate());
+    }
+    function countForDay(d, mode) {
+      if (mode === 'tab') return d.tab;
+      if (mode === 'agent') return d.agent;
+      return d.all;
+    }
+    function monthInitial(dt) {
+      return dt.toLocaleString('en-US', { month: 'short' }).charAt(0);
+    }
+    function renderLineEditsCard(le, mode) {
+      var card = document.createElement('div');
+      card.className = 'card';
+      if (!le || !le.days || !le.days.length) {
+        var miss = document.createElement('p');
+        miss.className = 'le-unavailable';
+        miss.textContent =
+          'AI line edits could not be loaded or parsed. Confirm you are signed into Cursor; the dashboard API shape may have changed.';
+        card.appendChild(miss);
+        return card;
+      }
+
+      var map = new Map();
+      var maxV = 0;
+      le.days.forEach(function (d) {
+        var v = countForDay(d, mode);
+        map.set(d.date, v);
+        if (v > maxV) maxV = v;
+      });
+      function cellLevel(v) {
+        if (v <= 0) return 0;
+        if (maxV <= 0) return 0;
+        var lv = Math.ceil((v / maxV) * 4);
+        return Math.min(4, Math.max(1, lv));
+      }
+
+      var total =
+        mode === 'tab' ? le.totals.tab : mode === 'agent' ? le.totals.agent : le.totals.all;
+
+      var head = document.createElement('div');
+      head.className = 'le-header';
+      var left = document.createElement('div');
+      var title = document.createElement('p');
+      title.className = 'le-title';
+      title.textContent = 'AI Line Edits';
+      var big = document.createElement('p');
+      big.className = 'le-total';
+      big.textContent = Number(total).toLocaleString();
+      left.appendChild(title);
+      left.appendChild(big);
+      head.appendChild(left);
+
+      var seg = document.createElement('div');
+      seg.className = 'le-seg';
+      [['all', 'All'], ['tab', 'Tab'], ['agent', 'Agent']].forEach(function (pair) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = pair[1];
+        if (pair[0] === mode) b.classList.add('active');
+        b.addEventListener('click', function () {
+          lineFilter = pair[0];
+          if (lastPayload && lastPayload.status === 'ok') render(lastPayload);
+        });
+        seg.appendChild(b);
+      });
+      head.appendChild(seg);
+      card.appendChild(head);
+
+      var end = new Date();
+      end.setHours(0, 0, 0, 0);
+      var start = new Date(end);
+      start.setDate(start.getDate() - 371);
+      while (start.getDay() !== 0) start.setDate(start.getDate() - 1);
+
+      var weeks = [];
+      var cur = new Date(start);
+      while (cur <= end) {
+        var vals = [];
+        for (var r = 0; r < 7; r++) {
+          var cell = new Date(cur);
+          cell.setDate(cell.getDate() + r);
+          if (cell > end) vals.push(0);
+          else vals.push(map.get(fmtKey(cell)) || 0);
+        }
+        weeks.push({ start: new Date(cur), values: vals });
+        cur.setDate(cur.getDate() + 7);
+      }
+
+      var monthsRow = document.createElement('div');
+      monthsRow.className = 'hm-months';
+      var prevM = -1;
+      weeks.forEach(function (w) {
+        var sp = document.createElement('span');
+        var m = w.start.getMonth();
+        sp.textContent = m !== prevM ? monthInitial(w.start) : '';
+        prevM = m;
+        monthsRow.appendChild(sp);
+      });
+
+      var body = document.createElement('div');
+      body.className = 'hm-body';
+      var yax = document.createElement('div');
+      yax.className = 'hm-yaxis';
+      ['', 'M', '', 'W', '', 'F', ''].forEach(function (t) {
+        var s = document.createElement('span');
+        s.textContent = t;
+        yax.appendChild(s);
+      });
+      var grid = document.createElement('div');
+      grid.className = 'hm-grid';
+      weeks.forEach(function (w) {
+        w.values.forEach(function (v) {
+          var c = document.createElement('div');
+          c.className = 'hm-cell hm-l' + cellLevel(v);
+          c.title = String(v) + ' lines';
+          grid.appendChild(c);
+        });
+      });
+      body.appendChild(yax);
+      body.appendChild(grid);
+
+      var wrap = document.createElement('div');
+      wrap.className = 'hm-wrap';
+      wrap.appendChild(monthsRow);
+      wrap.appendChild(body);
+      card.appendChild(wrap);
+
+      var dl = document.createElement('dl');
+      dl.className = 'le-stats';
+      [
+        ['Most active month', le.mostActiveMonth || 'N/A'],
+        ['Most active day', le.mostActiveDayDisplay || 'N/A'],
+        ['Longest streak', (le.longestStreakDays || 0) + 'd'],
+        ['Current streak', (le.currentStreakDays || 0) + 'd'],
+      ].forEach(function (pair) {
+        var dt = document.createElement('dt');
+        dt.textContent = pair[0];
+        var dd = document.createElement('dd');
+        dd.textContent = pair[1];
+        dl.appendChild(dt);
+        dl.appendChild(dd);
+      });
+      card.appendChild(dl);
+
+      var note = document.createElement('p');
+      note.className = 'le-unavailable';
+      note.style.marginTop = '6px';
+      note.textContent = 'Streaks and “most active” use total AI lines (All), not the selected tab.';
+      card.appendChild(note);
+
+      var leg = document.createElement('div');
+      leg.className = 'le-legend';
+      leg.appendChild(document.createTextNode('Fewer'));
+      var sw = document.createElement('span');
+      sw.className = 'sw';
+      for (var L = 0; L <= 4; L++) {
+        var e = document.createElement('span');
+        e.className = 'hm-cell hm-l' + L;
+        sw.appendChild(e);
+      }
+      leg.appendChild(sw);
+      leg.appendChild(document.createTextNode('More'));
+      card.appendChild(leg);
+
+      return card;
+    }
+
     function render(data) {
+      lastPayload = data;
       root.removeAttribute('aria-busy');
       root.innerHTML = '';
       statusEl.textContent = '';
@@ -297,6 +587,7 @@ function statsWebviewHtml(nonce: string): string {
       }
 
       root.appendChild(card);
+      root.appendChild(renderLineEditsCard(data.lineEdits, lineFilter));
     }
 
     window.addEventListener('message', function (e) {
@@ -319,6 +610,11 @@ function statsWebviewHtml(nonce: string): string {
     openSpending.addEventListener('click', function (ev) {
       ev.preventDefault();
       vscode.postMessage({ type: 'openSpending' });
+    });
+
+    openDashboard.addEventListener('click', function (ev) {
+      ev.preventDefault();
+      vscode.postMessage({ type: 'openDashboard' });
     });
 
     showSkeleton();
@@ -369,6 +665,9 @@ export function openCursorStatsPanel(
             }
             if (msg?.type === 'openSpending') {
                 vscode.env.openExternal(vscode.Uri.parse('https://cursor.com/dashboard/spending'));
+            }
+            if (msg?.type === 'openDashboard') {
+                vscode.env.openExternal(vscode.Uri.parse('https://cursor.com/dashboard'));
             }
         },
         undefined,

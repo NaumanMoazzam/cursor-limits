@@ -16,11 +16,14 @@ We built a complete, production-ready VS Code extension specifically tailored fo
 
 ### 1. Zero-Friction Authentication (The "Hacker" Way)
 
-Rather than forcing you to dig through DevTools to find your `Workos-Session` token, we automated the extraction process. 
+Rather than forcing you to dig through DevTools to find your `Workos-Session` token, we automated the extraction process.
 
-- The extension runs a background process (`child_process.execSync`) targeting your local OS's built-in `sqlite3` binary.
-- It silently queries Cursor's internal global state database (`~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`) for the key `cursorAuth/accessToken`.
-- This provides the session token needed to authenticate against the private endpoint `https://www.cursor.com/api/usage`.
+- The extension loads **[sql.js](https://github.com/sql-js/sql.js)** (SQLite compiled to WebAssembly) inside the extension host—no `child_process` shell-out and **no dependency on a system `sqlite3` binary**. That matters especially on **Windows**, where `sqlite3` is rarely on `PATH` by default.
+- It reads Cursor’s global state SQLite file and selects the `cursorAuth/accessToken` row from `ItemTable`. Typical paths:
+  - **macOS**: `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`
+  - **Windows**: `%APPDATA%\Cursor\User\globalStorage\state.vscdb`
+  - **Linux**: `~/.config/Cursor/User/globalStorage/state.vscdb`
+- The token is turned into the same `WorkosCursorSessionToken` cookie shape the dashboard uses, then the extension calls Cursor’s usage/plan HTTP APIs (e.g. `https://cursor.com/api/usage-summary`, with a fallback to `https://cursor.com/api/usage`).
 
 ### 2. High-Fidelity UI Integrations
 
@@ -35,29 +38,31 @@ We leveraged standard VS Code API endpoints to build a beautiful status item:
 
 - Successfully scaffolded all configuration files (`tsconfig.json`, `launch.json`, `tasks.json`, `package.json`).
 - Handled all TypeScript typings and native Node.js ES modules.
-- Compiled down to pure JavaScript and packaged everything into a final local binary—`cursor-limits-0.0.1.vsix`.
+- Compiled down to JavaScript (including the `sql.js` dependency in `node_modules`) and packaged into a `.vsix` (name includes the version from `package.json`).
 
 ---
 
 ## How to Test It
 
-Because the extension has already been compiled and packaged into a `.vsix` wrapper, installation is a breeze.
+After `npm run compile` (and optionally `npm run vsix`), you can run from source or install the packaged extension.
 
 ### Method 1: The Dev Host (For fast iteration)
 
 If you want to view or tweak the TypeScript code (`src/extension.ts`):
 
-1. Open the source directory inside Cursor: `File -> Open Folder` -> `/Users/apple/cursor-limits`
-2. Press `F5` on your keyboard.
-3. A secondary "Extension Development Host" Cursor window will pop up. Your new status bar will instantly appear in the bottom right corner of that new window!
+1. Open this repository folder in Cursor: **File → Open Folder** (e.g. your clone of `cursor-limits`).
+2. Press **F5** (or **Run → Start Debugging**).
+3. An **Extension Development Host** window opens. The status bar item should appear there once you are signed into Cursor on that machine.
 
-### Method 2: Permanent Installation
+### Method 2: Permanent installation (VSIX)
 
-If you simply want to test the binary on your primary environment forever:
+1. Open the Extensions view (**Ctrl+Shift+X** on Windows/Linux, **Cmd+Shift+X** on macOS).
+2. Open the **…** menu on the Extensions view title bar.
+3. Choose **Install from VSIX…** and pick the generated `cursor-limits-<version>.vsix` from `npm run vsix`.
+4. Reload if prompted; the extension stays enabled across workspaces.
 
-1. Reveal your Extensions Sidebar (Press `Cmd+Shift+X`).
-2. At the top-right of that sidebar panel, click the `...` (three dots) view menu.
-3. Click **"Install from VSIX..."**
-4. Navigate locally to `/Users/apple/cursor-limits/` and select `cursor-limits-0.0.1.vsix`.
-5. The extension will install instantly and remain active across all your projects.
+### Windows checklist
+
+- Confirm you are logged into Cursor (token must exist in `state.vscdb`).
+- If the DB is extremely large, first load may use more memory because sql.js reads the file into memory; that is a known tradeoff for not requiring a native SQLite binary.
 

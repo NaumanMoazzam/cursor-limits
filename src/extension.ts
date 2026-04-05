@@ -1,8 +1,10 @@
 import * as vscode from 'vscode';
-import { execSync } from 'child_process';
+import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { openCursorStatsPanel, type StatsPanelData } from './statsPanel';
+import initSqlJs, { type SqlJsStatic } from 'sql.js';
+import { fetchUserAnalyticsLineEdits } from './userAnalytics';
 
 // Cursor dashboard APIs (must match cookie format the site expects; see cursor.com network tab)
 const CURSOR_USAGE_SUMMARY_API = 'https://cursor.com/api/usage-summary';
@@ -38,38 +40,68 @@ function startPolling() {
     pollTimer = setInterval(updateUsageStats, 5 * 60 * 1000);
 }
 
-/**
- * Extracts the Auth token directly from Cursor's local SQLite database.
- * Uses child_process to avoid Electron native module compilation issues.
- */
-function getCursorAuthToken(): string | null {
-    try {
-        let dbPath = '';
-        if (process.platform === 'darwin') { // macOS
-            dbPath = path.join(os.homedir(), 'Library', 'Application Support', 'Cursor', 'User', 'globalStorage', 'state.vscdb');
-        } else if (process.platform === 'win32') { // Windows
-            dbPath = path.join(process.env.APPDATA || '', 'Cursor', 'User', 'globalStorage', 'state.vscdb');
-        } else { // Linux
-            dbPath = path.join(os.homedir(), '.config', 'Cursor', 'User', 'globalStorage', 'state.vscdb');
+let sqlJsPromise: Promise<SqlJsStatic> | null = null;
+
+function getCursorStateDbPath(): string {
+    if (process.platform === 'darwin') {
+        return path.join(os.homedir(), 'Library', 'Application Support', 'Cursor', 'User', 'globalStorage', 'state.vscdb');
+    }
+    if (process.platform === 'win32') {
+        return path.join(process.env.APPDATA || '', 'Cursor', 'User', 'globalStorage', 'state.vscdb');
+    }
+    return path.join(os.homedir(), '.config', 'Cursor', 'User', 'globalStorage', 'state.vscdb');
+}
+
+function parseStoredAccessToken(raw: string): string | null {
+    let s = raw.trim();
+    if (s.startsWith('"')) {
+        try {
+            s = JSON.parse(s) as string;
+        } catch {
+            s = s.replace(/^"|"$/g, '');
         }
+    }
+    return s || null;
+}
 
-        // Query the SQLite DB using standard system tools
-        const query = `sqlite3 "${dbPath}" "SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken' LIMIT 1;"`;
-        const result = execSync(query, { encoding: 'utf-8' }).trim();
+/**
+ * Reads the auth token from Cursor's local SQLite DB using sql.js (WASM).
+ * We no longer shell out to the `sqlite3` CLI: it ships with macOS but is not on PATH on typical Windows installs.
+ */
+async function getCursorAuthToken(): Promise<string | null> {
+    const dbPath = getCursorStateDbPath();
+    if (!dbPath || !fs.existsSync(dbPath)) {
+        return null;
+    }
 
-        if (result) {
-            let s = result.trim();
-            // DB often stores JSON-encoded strings
-            if (s.startsWith('"')) {
-                try {
-                    s = JSON.parse(s) as string;
-                } catch {
-                    s = s.replace(/^"|"$/g, '');
+    try {
+        if (!sqlJsPromise) {
+            sqlJsPromise = initSqlJs();
+        }
+        const SQL = await sqlJsPromise;
+        const fileBuffer = fs.readFileSync(dbPath);
+        const db = new SQL.Database(new Uint8Array(fileBuffer));
+        try {
+            const stmt = db.prepare(
+                "SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken' LIMIT 1",
+            );
+            let raw: string | null = null;
+            if (stmt.step()) {
+                const row = stmt.getAsObject() as { value?: unknown };
+                const v = row.value;
+                if (typeof v === 'string') {
+                    raw = v;
+                } else if (v instanceof Uint8Array) {
+                    raw = new TextDecoder().decode(v);
+                } else if (v != null) {
+                    raw = String(v);
                 }
             }
-            return s || null;
+            stmt.free();
+            return raw ? parseStoredAccessToken(raw) : null;
+        } finally {
+            db.close();
         }
-        return null;
     } catch (e) {
         console.error('Failed to extract Cursor token from SQLite:', e);
         return null;
@@ -254,7 +286,7 @@ function applyStatusBarFromData(data: StatsPanelData): void {
 }
 
 async function fetchUsageDisplayState(): Promise<StatsPanelData> {
-    const accessToken = getCursorAuthToken();
+    const accessToken = await getCursorAuthToken();
 
     if (!accessToken) {
         return { status: 'no-auth' };
@@ -284,15 +316,23 @@ async function fetchUsageDisplayState(): Promise<StatsPanelData> {
             planExpiry: null,
         };
 
-        const planInfoResponse = await fetch(CURSOR_PLAN_INFO_API, {
-            method: 'POST',
-            headers: {
-                ...baseHeaders,
-                Accept: '*/*',
-                'Content-Type': 'application/json',
-            },
-            body: '{}',
-        });
+        const [planInfoResponse, summaryResponse, lineEdits] = await Promise.all([
+            fetch(CURSOR_PLAN_INFO_API, {
+                method: 'POST',
+                headers: {
+                    ...baseHeaders,
+                    Accept: '*/*',
+                    'Content-Type': 'application/json',
+                },
+                body: '{}',
+            }),
+            fetch(CURSOR_USAGE_SUMMARY_API, {
+                headers: {
+                    ...baseHeaders,
+                },
+            }),
+            fetchUserAnalyticsLineEdits(session.sessionToken),
+        ]);
 
         if (planInfoResponse.ok) {
             const planInfoData = (await planInfoResponse.json()) as Record<string, unknown>;
@@ -312,12 +352,6 @@ async function fetchUsageDisplayState(): Promise<StatsPanelData> {
                 );
             }
         }
-
-        const summaryResponse = await fetch(CURSOR_USAGE_SUMMARY_API, {
-            headers: {
-                ...baseHeaders,
-            },
-        });
 
         if (summaryResponse.ok) {
             const summaryData = (await summaryResponse.json()) as Record<string, unknown>;
@@ -342,8 +376,8 @@ async function fetchUsageDisplayState(): Promise<StatsPanelData> {
                 const usageRatio = Math.min(Math.max(primaryPercent / 100, 0), 1);
 
                 return {
-                    status: 'ok',
-                    variant: 'summary',
+                    status: 'ok' as const,
+                    variant: 'summary' as const,
                     planName: subscriptionDetails.planName,
                     planExpiry: subscriptionDetails.planExpiry,
                     totalPercent,
@@ -352,6 +386,7 @@ async function fetchUsageDisplayState(): Promise<StatsPanelData> {
                     includedUsed,
                     includedLimit,
                     progressRatio: usageRatio,
+                    lineEdits: lineEdits ?? null,
                 };
             }
         }
@@ -382,8 +417,8 @@ async function fetchUsageDisplayState(): Promise<StatsPanelData> {
         const usageRatio = premiumLimit && premiumLimit > 0 ? premiumUsed / premiumLimit : 0;
 
         return {
-            status: 'ok',
-            variant: 'legacy',
+            status: 'ok' as const,
+            variant: 'legacy' as const,
             planName: subscriptionDetails.planName,
             planExpiry: subscriptionDetails.planExpiry,
             premiumUsed,
@@ -391,6 +426,7 @@ async function fetchUsageDisplayState(): Promise<StatsPanelData> {
             autoUsed,
             autoLimit,
             progressRatio: usageRatio,
+            lineEdits: lineEdits ?? null,
         };
     } catch (error: any) {
         return { status: 'error', message: `Failed to fetch usage: ${error.message}` };
