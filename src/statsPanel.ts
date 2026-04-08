@@ -288,7 +288,6 @@ function statsWebviewHtml(nonce: string): string {
 </head>
 <body>
   <h1>Cursor usage</h1>
-  <p class="sub">Synced from your Cursor session (same data as the status bar).</p>
   <div class="toolbar">
     <button type="button" id="refresh">Refresh</button>
     <span class="msg" id="status"></span>
@@ -296,7 +295,6 @@ function statsWebviewHtml(nonce: string): string {
   <div id="root"></div>
   <div class="footer footer-links">
     <a href="#" id="openDashboard">Open Cursor dashboard</a>
-    <a href="#" id="openSpending">Open spending on cursor.com</a>
   </div>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();

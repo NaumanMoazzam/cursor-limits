@@ -39,6 +39,16 @@ function toFiniteNumber(value: unknown): number | null {
     return null;
 }
 
+function isLikelyEpochNumber(value: number): boolean {
+    // Seconds, milliseconds, microseconds, or nanoseconds epoch-like magnitudes.
+    const abs = Math.abs(value);
+    return abs >= 1_000_000_000 && abs <= 99_999_999_999_999_999;
+}
+
+function isDateLikeKey(key: string): boolean {
+    return /(?:^|_)(?:date|day|time|timestamp|ts|bucket|period)(?:$|_)/i.test(key);
+}
+
 function pad2(n: number): string {
     return n < 10 ? `0${n}` : String(n);
 }
@@ -144,26 +154,27 @@ function extractTabAgentAll(obj: Record<string, unknown>): { tab: number; agent:
             'linesAccepted',
             'total',
             'count',
-            'value',
-            'amount',
         ]) ?? 0;
 
     if (all === 0 && (tab > 0 || agent > 0)) {
         all = tab + agent;
     }
     if (all === 0 && tab === 0 && agent === 0) {
-        for (const v of Object.values(obj)) {
+        for (const [key, v] of Object.entries(obj)) {
             if (v === nestedAccepted) {
                 continue;
             }
+            if (isDateLikeKey(key)) {
+                continue;
+            }
             const n = toFiniteNumber(v);
-            if (n !== null && n > all) {
+            if (n !== null && n > all && !isLikelyEpochNumber(n)) {
                 all = n;
             }
         }
     }
 
-    return { tab, agent, all: Math.max(all, tab + agent) };
+    return { tab, agent, all };
 }
 
 function extractDateFromObject(obj: Record<string, unknown>): string | null {
@@ -262,13 +273,53 @@ function findDailyArray(root: unknown, depth = 0): unknown[] | null {
 function mergeDayMap(map: Map<string, LineEditsDayPayload>, date: string, tab: number, agent: number, all: number): void {
     const prev = map.get(date);
     if (!prev) {
-        map.set(date, { date, tab, agent, all: Math.max(all, tab + agent) });
+        map.set(date, { date, tab, agent, all });
         return;
     }
-    const priorAll = prev.all;
     prev.tab += tab;
     prev.agent += agent;
-    prev.all = Math.max(prev.tab + prev.agent, priorAll + all);
+    prev.all += all;
+}
+
+function parseFromDailyMetrics(root: unknown): LineEditsViewModel | null {
+    const rec = asRecord(root);
+    const arr = rec?.dailyMetrics;
+    if (!Array.isArray(arr) || arr.length === 0) {
+        return null;
+    }
+
+    const map = new Map<string, LineEditsDayPayload>();
+    for (const row of arr) {
+        const r = asRecord(row);
+        if (!r) {
+            continue;
+        }
+
+        const date = parseDateKeyFromValue(r.date) ?? extractDateFromObject(r);
+        if (!date) {
+            continue;
+        }
+
+        const acceptedAdded = toFiniteNumber(r.acceptedLinesAdded) ?? 0;
+        const acceptedDeleted = toFiniteNumber(r.acceptedLinesDeleted) ?? 0;
+        const all = Math.max(0, acceptedAdded + acceptedDeleted);
+
+        // Keep tab/agent optional and bounded; the API does not currently expose exact line split.
+        const { tab: maybeTab, agent: maybeAgent } = extractTabAgentAll(r);
+        const tab = Math.min(Math.max(0, maybeTab), all);
+        const agent = Math.min(Math.max(0, maybeAgent), Math.max(0, all - tab));
+
+        if (all === 0 && tab === 0 && agent === 0) {
+            continue;
+        }
+        mergeDayMap(map, date, tab, agent, all);
+    }
+
+    const days = [...map.values()].sort((a, b) => a.date.localeCompare(b.date));
+    if (days.length === 0) {
+        return null;
+    }
+    return computeAggregates(days);
 }
 
 function computeAggregates(days: LineEditsDayPayload[]): LineEditsViewModel {
@@ -370,6 +421,11 @@ function computeAggregates(days: LineEditsDayPayload[]): LineEditsViewModel {
 }
 
 export function parseUserAnalyticsLineEdits(json: unknown): LineEditsViewModel | null {
+    const dailyMetricsParsed = parseFromDailyMetrics(json);
+    if (dailyMetricsParsed) {
+        return dailyMetricsParsed;
+    }
+
     const arr = findDailyArray(json);
     if (!arr || arr.length === 0) {
         return null;

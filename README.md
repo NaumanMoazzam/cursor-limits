@@ -6,6 +6,10 @@ VS Code / **Cursor** extension that reads your session from Cursor’s local SQL
 
 ![Cursor Limits extension overview](./extension-overview.png)
 
+## Dashboard Panel
+
+![Cursor Limits dashboard panel](./dashboard-panel.png)
+
 ## Disclaimer
 
 This extension uses **undocumented** storage keys and `cursor.com` routes that may change at any time. It may **stop working** after a Cursor update. See [SECURITY.md](SECURITY.md) for what is read and where requests go, and [POLICY.md](POLICY.md) before publishing or redistributing.
@@ -18,7 +22,8 @@ Tested on **macOS** and **Windows**. Linux should work if Cursor stores data und
 - **Color coding**: Warning near high usage, error color at very high usage.
 - **Progress bar**: ASCII bar in the status text.
 - **Tooltip**: Premium vs Auto/Composer-style breakdown when available from the API.
-- **Dashboard**: Command / click opens Cursor’s spending dashboard in the browser.
+- **Dashboard panel**: Clicking the extension status bar item (or running the command) opens the in-editor Cursor usage dashboard panel.
+- **Quick links**: The panel includes links to open the Cursor dashboard and spending page in your browser.
 
 ## Requirements
 
