@@ -20,7 +20,7 @@
     "commands": [
       {
         "command": "cursorStatusline.openDashboard",
-        "title": "Cursor: Open Dashboard"
+        "title": "Cursor: Open Usage Panel"
       }
     ]
   },
