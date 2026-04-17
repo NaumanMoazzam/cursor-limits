@@ -3,7 +3,7 @@
   "displayName": "Cursor Limits",
   "publisher": "naumanmoazzam",
   "description": "Show Cursor fast/slow limits in the status bar",
-  "version": "0.0.2",
+  "version": "0.0.5",
   "icon": "icon.png",
   "license": "MIT",
   "engines": {

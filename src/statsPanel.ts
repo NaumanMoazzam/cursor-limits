@@ -605,10 +605,12 @@ function statsWebviewHtml(nonce: string): string {
       vscode.postMessage({ type: 'refresh' });
     });
 
-    openSpending.addEventListener('click', function (ev) {
-      ev.preventDefault();
-      vscode.postMessage({ type: 'openSpending' });
-    });
+    if (openSpending) {
+      openSpending.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        vscode.postMessage({ type: 'openSpending' });
+      });
+    }
 
     openDashboard.addEventListener('click', function (ev) {
       ev.preventDefault();
